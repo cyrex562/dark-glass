@@ -1,0 +1,19 @@
+[Interface]
+# Name = node1.example.tld
+Address = 192.0.2.3/32
+ListenPort = 51820
+PrivateKey = localPrivateKeyAbcAbcAbc=
+DNS = 1.1.1.1,8.8.8.8
+Table = 12345
+MTU = 1500
+PreUp = /bin/example arg1 arg2 %i
+PostUp = /bin/example arg1 arg2 %i
+PreDown = /bin/example arg1 arg2 %i
+PostDown = /bin/example arg1 arg2 %i
+
+[Peer]
+# Name = node2-node.example.tld
+AllowedIPs = 192.0.2.1/24
+Endpoint = node1.example.tld:51820
+PublicKey = remotePublicKeyAbcAbcAbc=
+PersistentKeepalive = 25

@@ -1,0 +1,23 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "debug add_peer.py #1",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/wireguard/add_peer.py",
+            "console": "integratedTerminal",
+            "args": [
+                "add-peer",
+                "--ifc-cfg=/etc/wireguard/wg0.conf",
+                "--peer-allow=10.50.0.0/24",
+                "--endpoint=161.35.100.251:54321",
+                "--address=10.58.0.6",
+                "--network=10.58.0.0/24"
+            ]
+        }
+    ]
+}

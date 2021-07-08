@@ -1,0 +1,4 @@
+endpoint = 161.35.100.251:54321
+
+allowed = (ip address)
+
