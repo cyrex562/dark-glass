@@ -1,0 +1,49 @@
+version: "3.6"
+
+services: 
+  wireguard_api:
+    image: zabenno/wireguard_broker_server:latest
+    networks: 
+      frontend:
+        aliases: 
+          - wireguard_api
+    secrets:
+      - api_password
+      - db_password
+    environment: 
+      DB_SERVER: 192.168.0.126
+  reverse-proxy:
+    image: nginx
+    networks: 
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    configs: 
+      - source: proxy_conf
+        target: /etc/nginx/conf.d/default.conf
+    secrets:
+      - source: api_cert
+        target: wireguard.crt
+      - source: api_key
+        target: wireguard.key
+
+networks: 
+  frontend:
+    driver: overlay
+
+secrets:
+  api_password:
+    file: ./api_password.txt
+  db_password:
+    file: ./db_password.txt
+  api_cert:
+    file: ./wireguard.crt
+  api_key:
+    file: ./wireguard.key
+
+configs:
+  proxy_conf:
+    file: ./proxy.conf

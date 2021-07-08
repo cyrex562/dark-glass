@@ -1,0 +1,68 @@
+---
+- name: Configure the server and install required software
+  hosts: vpn-host
+  gather_facts: false
+  become: true
+  vars_files:
+    - config.cfg
+  tasks:
+    - block:
+      - name: Wait until the cloud-init completed
+        wait_for:
+          path: /var/lib/cloud/data/result.json
+          delay: 10
+          timeout: 600
+          state: present
+        become: false
+        when: cloudinit
+
+      - block:
+        - name: Ensure the config directory exists
+          file:
+            dest: "configs/{{ IP_subject_alt_name }}"
+            state: directory
+            mode: "0700"
+
+        become: false
+        delegate_to: localhost
+
+      - import_role:
+          name: common
+        tags: common
+
+      - import_role:
+          name: dns
+        when:
+          - algo_dns_adblocking or
+            dns_encryption
+        tags: dns
+
+      - import_role:
+          name: wireguard
+        when: wireguard_enabled
+        tags: wireguard
+
+      - block:
+        - name: Dump the configuration
+          copy:
+            dest: "configs/{{ IP_subject_alt_name }}/.config.yml"
+            content: |
+              server: {{ 'localhost' if inventory_hostname == 'localhost' else inventory_hostname }}
+              server_user: {{ ansible_ssh_user }}
+              ansible_ssh_port: "{{ ansible_ssh_port|default(22) }}"
+              algo_server_name: {{ algo_server_name }}
+              algo_dns_adblocking: {{ algo_dns_adblocking }}
+              IP_subject_alt_name: {{ IP_subject_alt_name }}
+              wireguard_enabled: {{ wireguard_enabled }}
+          become: false
+          delegate_to: localhost
+
+        - name: Create a symlink if deploying to localhost
+          file:
+            src: "{{ IP_subject_alt_name }}"
+            dest: configs/localhost
+            state: link
+            force: true
+          when: inventory_hostname == 'localhost'
+      rescue:
+        - include_tasks: playbooks/rescue.yml

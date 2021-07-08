@@ -1,0 +1,10 @@
+---
+- name: Check the system
+  raw: uname -a
+  register: OS
+  changed_when: false
+
+- name: Include tasks for Ubuntu
+  include_tasks: ubuntu.yml
+
+- meta: flush_handlers

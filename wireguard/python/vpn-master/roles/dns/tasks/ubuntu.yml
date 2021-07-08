@@ -1,0 +1,49 @@
+---
+- name: Install dnscrypt-proxy
+  apt:
+    name: dnscrypt-proxy
+    default_release: unstable
+    state: present
+
+- name: Install dnscrypt-proxy
+  apt:
+    name: dnscrypt-proxy
+    state: present
+
+- block:
+  - name: Ubuntu | Configure AppArmor policy for dnscrypt-proxy
+    copy:
+      src: apparmor.profile.dnscrypt-proxy
+      dest: /etc/apparmor.d/usr.bin.dnscrypt-proxy
+      owner: root
+      group: root
+      mode: 0600
+    notify: restart dnscrypt-proxy
+
+  - name: Ubuntu | Enforce the dnscrypt-proxy AppArmor policy
+    command: aa-enforce usr.bin.dnscrypt-proxy
+    changed_when: false
+    notify: restart dnscrypt-proxy
+
+  tags: apparmor
+
+- name: Ubuntu | Ensure that the dnscrypt-proxy service directory exist
+  file:
+    path: /etc/systemd/system/dnscrypt-proxy.service.d/
+    state: directory
+    mode: 0755
+    owner: root
+    group: root
+
+- name: Ubuntu | Add custom requirements to successfully start the unit
+  copy:
+    dest: /etc/systemd/system/dnscrypt-proxy.service.d/99-algo.conf
+    content: |
+      [Unit]
+      After=systemd-resolved.service
+      Requires=systemd-resolved.service
+
+      [Service]
+      AmbientCapabilities=CAP_NET_BIND_SERVICE
+  notify:
+   - restart dnscrypt-proxy

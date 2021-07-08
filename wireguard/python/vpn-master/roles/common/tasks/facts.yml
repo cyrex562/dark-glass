@@ -1,0 +1,14 @@
+---
+- name: Set facts
+  set_fact:
+    IP_subject_alt_name: "{{ IP_subject_alt_name }}"
+
+- name: Set IPv6 support as a fact
+  set_fact:
+    ipv6_support: "{% if ansible_default_ipv6['gateway'] is defined %}true{% else %}false{% endif %}"
+  tags: always
+
+- name: Check size of MTU
+  set_fact:
+    reduce_mtu: "{{ 1500 - ansible_default_ipv4['mtu']|int if reduce_mtu|int == 0 and ansible_default_ipv4['mtu']|int < 1500 else reduce_mtu|int }}"
+  tags: always

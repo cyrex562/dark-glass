@@ -1,0 +1,33 @@
+---
+- name: Ask user for the input
+  hosts: localhost
+  tags: always
+  vars:
+    defaults:
+      server_name: algo
+      dns_adblocking: false
+  vars_files:
+    - config.cfg
+
+  tasks:
+    - block:
+      - name: DNS adblocking prompt
+        pause:
+          prompt: |
+            Do you want to enable DNS ad blocking on this VPN server?
+            [y/N]
+        register: _dns_adblocking
+        when: dns_adblocking is undefined
+
+      - name: Set facts based on the input
+        set_fact:
+          algo_server_name: >-
+            {% set _server = defaults['server_name'] %}
+            {{ _server | regex_replace('(?!\.)(\W|_)', '-') }}
+          algo_dns_adblocking: >-
+            {% if dns_adblocking is defined %}{{ dns_adblocking | bool }}
+            {%- elif _dns_adblocking.user_input is defined %}{{ booleans_map[_dns_adblocking.user_input] | default(defaults['dns_adblocking']) }}
+            {%- else %}false{% endif %}
+
+      rescue:
+        - include_tasks: playbooks/rescue.yml

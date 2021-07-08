@@ -1,0 +1,51 @@
+---
+- name: WireGuard installed
+  apt:
+    name: wireguard-tools
+    state: present
+
+- name: WireGuard reload-module-on-update
+  file:
+    dest: /etc/wireguard/.reload-module-on-update
+    state: touch
+
+- name: install wgadmin
+  copy:
+    src: wgadmin
+    dest: /usr/bin/wgadmin
+    owner: root
+    group: root
+    mode: 0755
+
+- name: set wgadmin_deps
+  set_fact:
+    wgadmin_deps:
+      - python3
+      - python3-ruamel.yaml
+
+- name: Install wgadmin dependencies
+  apt:
+    name: "{{ wgadmin_deps|default([]) }}"
+    state: present
+
+- name: generate WireGuard Private Key
+  command: "/usr/bin/wg genkey"
+  register: wireguard_private_key_output
+
+- set_fact:
+    wireguard_private_key: "{{ wireguard_private_key_output.stdout }}"
+
+- name: wgadmin configured
+  template:
+    src: wg0.yaml.j2
+    dest: "/etc/wireguard/{{ wireguard_interface }}.yaml"
+    mode: "0600"
+
+- name: generate WireGuard config
+  command: "/usr/bin/wgadmin sync --input /etc/wireguard/{{ wireguard_interface }}.yaml --output /etc/wireguard/{{ wireguard_interface }}.conf"
+  become: yes
+
+- name: Set OS specific facts
+  set_fact:
+    service_name: "wg-quick@{{ wireguard_interface }}"
+  tags: always

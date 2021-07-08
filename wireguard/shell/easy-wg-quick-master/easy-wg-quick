@@ -1,0 +1,578 @@
+#!/bin/sh
+# easy-wg-quick - Creates Wireguard configuration for hub and peers with ease
+# Copyright (C) 2019, 2020 Krzysztof Burghardt <krzysztof@burghardt.pl>
+#
+#
+# License
+# -------
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 2 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# You are encouraged to send comments, improvements or suggestions to
+# me at krzysztof@burghardt.pl
+#
+# For updates visit https://github.com/burghardt/easy-wg-quick
+
+check_if_wg_is_installed() {
+    wg show interfaces >/dev/null 2>&1 || {
+        echo 'Unable to use "wg" command. Are wireguard tools installed?'
+        printf 'Read https://github.com/burghardt/easy-wg-quick#prerequisites\n'
+        exit 1
+    }
+}
+
+detect_ext_net_if() {
+    if test "x$(uname -s)" = "xFreeBSD"; then
+        route get default | awk '$1 == "interface:" { print $2 }'
+    elif test "x$(uname -s)" = "xLinux"; then
+        ip route sh | awk '$1 == "default" && $2 == "via" { print $5; exit }'
+    fi
+}
+
+create_ext_net_if() {
+    echo "No extnetif.txt... creating one!"
+    detect_ext_net_if > extnetif.txt
+    test -s extnetif.txt || {
+        echo 'Unable to detect external interface name.'
+        echo 'Set it manually in extnetif.txt file and start script again.'
+        exit 1
+    }
+}
+
+get_ext_net_if() {
+    cat extnetif.txt
+}
+
+detect_ext_net_ip() {
+    if test "x$(uname -s)" = "xFreeBSD"; then
+        ifconfig "$1" | awk '$1 == "inet" { print $2 }'
+    elif test "x$(uname -s)" = "xLinux"; then
+        ip addr sh "$1" | grep 'inet ' | xargs | awk -F'[ /]' '{ print $2 }'
+    fi
+}
+
+create_ext_net_ip() {
+    echo "No extnetip.txt... creating one!"
+    detect_ext_net_ip "$1" > extnetip.txt
+    test -s extnetip.txt || {
+        echo 'Unable to detect external interface IP address.'
+        echo 'Set it manually in extnetip.txt file and start script again.'
+        exit 1
+    }
+}
+
+get_ext_net_ip() {
+    cat extnetip.txt
+}
+
+create_client_allowedips() {
+    echo "No intnetallowedips.txt... creating one!"
+    echo "0.0.0.0/0, ::/0" > intnetallowedips.txt
+}
+
+get_client_allowedips() {
+    cat intnetallowedips.txt
+}
+
+detect_fw_type() {
+    if test "x$(uname -s)" = "xFreeBSD"; then
+        echo "pf"
+    elif test "x$(uname -s)" = "xLinux"; then
+        echo "iptables"
+    fi
+}
+
+create_fw_type() {
+    echo "No fwtype.txt... creating one!"
+    detect_fw_type > fwtype.txt
+    test -s fwtype.txt || {
+        echo 'Unable to detect firewall type.'
+        echo 'Set it manually in fwtype.txt file and start script again.'
+        exit 1
+    }
+}
+
+get_fw_type() {
+    cat fwtype.txt
+}
+
+detect_sysctl_type() {
+    if test "x$(uname -s)" = "xFreeBSD"; then
+        echo "freebsd"
+    elif test "x$(uname -s)" = "xLinux"; then
+        echo "linux"
+    fi
+}
+
+create_sysctl_type() {
+    echo "No sysctltype.txt... creating one!"
+    detect_sysctl_type > sysctltype.txt
+    test -s sysctltype.txt || {
+        echo 'Unable to detect sysctl type.'
+        echo 'Set it manually in sysctltype.txt file and start script again.'
+        exit 1
+    }
+}
+
+get_sysctl_type() {
+    cat sysctltype.txt
+}
+
+check_if_ipv6_is_available() {
+    if test -f forceipv6.txt; then
+        echo 'File forceipv6.txt exists. Enabling IPv6 in tunnels!'
+        return  0
+    elif test "x$(uname -s)" = "xFreeBSD"; then
+        IPV6ADR=$(ifconfig "$1" | awk '$1 == "inet6" { print $2 }' | grep -v "%$1$")
+        test -n "$IPV6ADR" && {
+            echo 'Looks like you have IPv6 available. Enabling IPv6 in tunnels!'
+            return  0
+        }
+    elif test "x$(uname -s)" = "xLinux"; then
+        ip -6 addr | grep -i 'scope global' >/dev/null 2>&1 && {
+            echo 'Looks like you have IPv6 available. Enabling IPv6 in tunnels!'
+            return  0
+        }
+    else
+        echo 'Unsupported operating system. Unable to detect IPv6 availability.'
+    fi
+    return 1
+}
+
+update_seq_no() {
+    echo "$1" > seqno.txt
+}
+
+create_seq_no() {
+    echo "No seqno.txt... creating one!"
+    update_seq_no 10
+}
+
+get_seq_no() {
+    SEQNO=$(cat seqno.txt)
+    NEXT=$((SEQNO+1))
+    update_seq_no $NEXT
+    echo "$SEQNO"
+}
+
+create_port_no() {
+    echo "No portno.txt... creating one!"
+    (shuf -i 1025-65535 -n 1 || jot -r 1 1025 65535) > portno.txt 2>/dev/null
+    test -s portno.txt || {
+        echo 'Unable to assign random port for Wireguard.'
+        echo 'Set it manually in portno.txt file and start script again.'
+        exit 1
+    }
+}
+
+get_port_no() {
+    cat portno.txt
+}
+
+create_int_net_dns() {
+    echo "No intnetdns.txt... creating one!"
+    echo "1.1.1.1" > intnetdns.txt
+}
+
+get_int_net_dns() {
+    cat intnetdns.txt
+}
+
+create_int_net_address() {
+    echo "No intnetaddress.txt... creating one!"
+    RNDNET1="$( (shuf -i 1-250 -n 1 || jot -r 1 1 250) 2>/dev/null)"
+    RNDNET2="$( (shuf -i 1-250 -n 1 || jot -r 1 1 250) 2>/dev/null)"
+    echo "10.${RNDNET1:-127}.${RNDNET2:-0}." > intnetaddress.txt
+}
+
+get_int_net_address() {
+    cat intnetaddress.txt
+}
+
+create_int_net_mtu() {
+    echo "No intnetmtu.txt... creating one!"
+    echo "1280" > intnetmtu.txt
+}
+
+get_int_net_mtu() {
+    cat intnetmtu.txt
+}
+
+create_int_net_mask() {
+    echo "No intnetmask.txt... creating one!"
+    echo "/24" > intnetmask.txt
+}
+
+get_int_net_mask() {
+    cat intnetmask.txt
+}
+
+create_int_net6_dns() {
+    echo "No intnet6dns.txt... creating one!"
+    echo "2606:4700:4700::1111" > intnet6dns.txt
+}
+
+get_int_net6_dns() {
+    cat intnet6dns.txt
+}
+
+create_int_net6_address() {
+    echo "No intnet6address.txt... creating one!"
+    RNDGLB1="$( (shuf -i 11-99 -n 1 || jot -r 1 11 99) 2>/dev/null)"
+    RNDGLB2="$( (shuf -i 1111-9999 -n 1 || jot -r 1 1111 9999) 2>/dev/null)"
+    RNDGLB3="$( (shuf -i 1111-9999 -n 1 || jot -r 1 1111 9999) 2>/dev/null)"
+    RNDSUBN="$( (shuf -i 1111-9999 -n 1 || jot -r 1 1111 9999) 2>/dev/null)"
+    echo "fd${RNDGLB1:-fc}:${RNDGLB2:-2965}:${RNDGLB3:-0503}:${RNDSUBN:-e2ae}::" > intnet6address.txt
+}
+
+get_int_net6_address() {
+    cat intnet6address.txt
+}
+
+create_int_net6_mask() {
+    echo "No intnet6mask.txt... creating one!"
+    echo "/64" > intnet6mask.txt
+}
+
+get_int_net6_mask() {
+    cat intnet6mask.txt
+}
+
+create_ipv6_mode() {
+    echo "No ipv6mode.txt... creating one!"
+    echo "masquerade" > ipv6mode.txt
+}
+
+get_ipv6_mode() {
+    cat ipv6mode.txt
+}
+
+create_psk() {
+    echo "No wgpsk.key... creating one!"
+    wg genpsk > wgpsk.key
+}
+
+create_hub_key() {
+    echo "No wghub.key... creating one!"
+    wg genkey > wghub.key
+}
+
+create_iptables_rules() {
+    cat << EOF
+PostUp = iptables -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -o $EXT_NET_IF -j TCPMSS --clamp-mss-to-pmtu
+PostUp = ip6tables -t mangle -A POSTROUTING -p tcp --tcp-flags SYN,RST SYN -o $EXT_NET_IF -j TCPMSS --clamp-mss-to-pmtu
+PostUp = iptables -t nat -A POSTROUTING -o $EXT_NET_IF -j MASQUERADE
+PostUp = iptables -A FORWARD -i %i -j ACCEPT
+PostUp = ip6tables -A FORWARD -i %i -j ACCEPT
+PostDown = iptables -D FORWARD -i %i -j ACCEPT
+PostDown = ip6tables -D FORWARD -i %i -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -o $EXT_NET_IF -j MASQUERADE
+PostDown = iptables -t mangle -D POSTROUTING -p tcp --tcp-flags SYN,RST SYN -o $EXT_NET_IF -j TCPMSS --clamp-mss-to-pmtu
+PostDown = ip6tables -t mangle -D POSTROUTING -p tcp --tcp-flags SYN,RST SYN -o $EXT_NET_IF -j TCPMSS --clamp-mss-to-pmtu
+EOF
+    if test "x$NET6MODE" = "xmasquerade"; then
+        cat << EOF
+PostUp = ip6tables -t nat -A POSTROUTING -o $EXT_NET_IF -j MASQUERADE
+PostDown = ip6tables -t nat -D POSTROUTING -o $EXT_NET_IF -j MASQUERADE
+EOF
+    fi
+}
+
+create_firewalld_rules() {
+    cat << EOF
+PostUp = firewall-cmd --zone=public --add-port $EXT_NET_PORT/udp
+PostUp = firewall-cmd --zone=public --add-masquerade
+PostDown = firewall-cmd --zone=public --remove-port $EXT_NET_PORT/udp
+PostDown = firewall-cmd --zone=public --remove-masquerade
+EOF
+}
+
+create_sysctl_linux_rules() {
+    cat << EOF
+PostUp = sysctl -q -w net.ipv4.ip_forward=1
+PostUp = sysctl -q -w net.ipv6.conf.all.forwarding=1
+PostDown = sysctl -q -w net.ipv4.ip_forward=0
+PostDown = sysctl -q -w net.ipv6.conf.all.forwarding=0
+EOF
+    if test "x$NET6MODE" = "xproxy_ndp"; then
+        cat << EOF
+PostUp = sysctl -q -w net.ipv6.conf.all.proxy_ndp=1
+PostDown = sysctl -q -w net.ipv6.conf.all.proxy_ndp=0
+EOF
+    fi
+}
+
+create_pf_rules() {
+    cat << EOF
+PostUp = printf 'nat on $EXT_NET_IF from %i:network to any -> ($EXT_NET_IF)\\npass all\\n' | pfctl -f -
+PostUp = pfctl -e
+PostDown = pfctl -d
+PostDown = printf '' | pfctl -f -
+EOF
+}
+
+create_sysctl_freebsd_rules() {
+    cat << EOF
+PostUp = sysctl net.inet.ip.forwarding=1
+PostUp = sysctl net.inet6.ip6.forwarding=1
+PostDown = sysctl net.inet.ip.forwarding=0
+PostDown = sysctl net.inet6.ip6.forwarding=0
+EOF
+}
+
+create_hub_conf() {
+    echo "No wghub.conf... creating one!"
+    cat > wghub.conf << EOF
+# Hub configuration created on $(hostname) on $(date)
+[Interface]
+Address = $INT_NET_HUB_IP$INT_NET_MASK$($NET6 && echo ", $INT_NET6_HUB_IP$INT_NET6_MASK")
+ListenPort = $EXT_NET_PORT
+PrivateKey = $(cat wghub.key)
+SaveConfig = false
+MTU = $INT_NET_MTU
+EOF
+
+    if test "x$FW_TYPE" = "xiptables"; then
+        create_iptables_rules >> wghub.conf
+    elif test "x$FW_TYPE" = "xfirewalld"; then
+        create_firewalld_rules >> wghub.conf
+    elif test "x$FW_TYPE" = "xpf"; then
+        create_pf_rules >> wghub.conf
+    elif test "x$FW_TYPE" = "xcustom"; then
+        echo '# Custom PostUp / PostDown commands from commands.txt' >> wghub.conf
+        cat commands.txt >> wghub.conf
+    elif test "x$FW_TYPE" = "xnone"; then
+        echo '# Firewall PostUp / PostDown commands disabled with "none" set in fwtype.txt' >> wghub.conf
+    fi
+
+    if test "x$SYSCTL_TYPE" = "xlinux"; then
+        create_sysctl_linux_rules >> wghub.conf
+    elif test "x$SYSCTL_TYPE" = "xfreebsd"; then
+        create_sysctl_freebsd_rules >> wghub.conf
+    elif test "x$SYSCTL_TYPE" = "xnone"; then
+        echo '# Sysctl PostUp / PostDown commands disabled with "none" set in sysctltype.txt' >> wghub.conf
+    fi
+
+    echo "Wireguard hub address is $EXT_NET_IP:$EXT_NET_PORT on $EXT_NET_IF."
+    echo "Note: customize [Interface] section of wghub.conf if required!"
+}
+
+create_new_client_conf_wg_quick() {
+    SEQNO="$1"
+    CONF_NAME="$2"
+
+    echo "No wgclient_$CONF_NAME.conf... creating one!"
+    cat > "wgclient_$CONF_NAME.conf" << EOF
+# $SEQNO: $CONF_NAME > wgclient_$CONF_NAME.conf
+[Interface]
+Address = $INT_NET_ADDRESS$SEQNO$INT_NET_MASK$($NET6 && echo ", $INT_NET6_ADDRESS$SEQNO$INT_NET6_MASK")
+DNS = $INT_NET_DNS$($NET6 && echo ", $INT_NET6_DNS")
+PrivateKey = $(wg genkey | tee "wgclient_$CONF_NAME.key")
+MTU = $INT_NET_MTU
+
+[Peer]
+PublicKey = $(wg pubkey < wghub.key)
+PresharedKey = $(cat wgpsk.key)
+AllowedIPs = $INT_NET_CLINET_ALLOWEDIPS
+Endpoint = $EXT_NET_IP:$EXT_NET_PORT
+PersistentKeepalive = 25
+EOF
+}
+
+allowedips_to_uci_list() {
+    ALLOWEDIPS="$1"
+
+    for IPRANGE in $(echo "$ALLOWEDIPS" | tr "," " "); do
+        echo "	list allowed_ips '$IPRANGE'"
+    done
+}
+
+create_new_client_conf_uci() {
+    SEQNO="$1"
+    CONF_NAME="$2"
+
+    echo "No wgclient_$CONF_NAME.uci.txt... creating one!"
+    cat > "wgclient_$CONF_NAME.uci.txt" << EOF
+# $SEQNO: $CONF_NAME > wgclient_$CONF_NAME.uci.txt
+config interface 'wg0'
+	option proto 'wireguard'
+	list addresses '$INT_NET_ADDRESS$SEQNO$INT_NET_MASK'
+$($NET6 && echo "	list addresses '$INT_NET6_ADDRESS$SEQNO$INT_NET6_MASK'")
+	list dns '$INT_NET_DNS'
+$($NET6 && echo "	list dns '$INT_NET6_DNS'")
+	option private_key '$(cat "wgclient_$CONF_NAME.key")'
+	option mtu '$INT_NET_MTU'
+
+config wireguard_wg0
+$(allowedips_to_uci_list "$INT_NET_CLINET_ALLOWEDIPS")
+	option route_allowed_ips '1'
+	option endpoint_host '$EXT_NET_IP'
+	option endpoint_port '$EXT_NET_PORT'
+	option persistent_keepalive '25'
+	option public_key '$(wg pubkey < wghub.key)'
+	option preshared_key '$(cat wgpsk.key)'
+EOF
+}
+
+create_new_client_conf() {
+    create_new_client_conf_wg_quick "$SEQNO" "$CONF_NAME"
+    create_new_client_conf_uci "$SEQNO" "$CONF_NAME"
+}
+
+add_client_to_hub_conf() {
+    SEQNO="$1"
+    CONF_NAME="$2"
+
+    printf "Updating wghub.conf..."
+    cat >> wghub.conf << EOF
+
+# $SEQNO: $CONF_NAME > wgclient_$CONF_NAME.conf
+[Peer]
+PublicKey = $(wg pubkey < "wgclient_$CONF_NAME.key")
+PresharedKey = $(cat wgpsk.key)
+AllowedIPs = $INT_NET_ADDRESS$SEQNO$INT_NET_ADDRESS_MASK$($NET6 && echo ", $INT_NET6_ADDRESS$1$INT_NET6_ADDRESS_MASK")
+EOF
+    if $NET6 && test "x$NET6MODE" = "xproxy_ndp"; then
+      NEIGHADD="PostUp = ip -6 neigh add proxy $INT_NET6_ADDRESS$1 dev $EXT_NET_IF"
+      NEIGHDEL="PostDown = ip -6 neigh del proxy $INT_NET6_ADDRESS$1 dev $EXT_NET_IF"
+      sed -i.bak "s/.*net.ipv6.conf.all.proxy_ndp=0.*/&\n$NEIGHADD\n$NEIGHDEL/" wghub.conf
+    fi
+
+    echo " done!"
+cat << EOF
+
+Important: Deploy updated wghub.conf configuration to wireguard with wg-quick:
+  sudo wg-quick down ./wghub.conf # if already configured
+  sudo wg-quick up ./wghub.conf
+  sudo wg show # to check status
+EOF
+}
+
+print_client_conf() {
+    echo "-----BEGIN CONFIG-----"
+    cat "wgclient_$1.conf"
+    echo "-----END CONFIG-----"
+}
+
+print_client_qrcode() {
+    qrencode -t ansiutf8 < "wgclient_$1.conf" | tee "wgclient_$1.qrcode.txt"
+    echo "Scan QR code with your phone or use \"wgclient_$1.conf\" file."
+}
+
+remove_temporary_client_key_file() {
+    rm -f "wgclient_$1.key"
+}
+
+check_conf_name_is_available() {
+    FILENAME="wgclient_$1.conf"
+    if test -e "$FILENAME"; then
+        printf '\nUnable to store configuration with chosen name: "%s" already exists.\n' "$FILENAME"
+        return 1
+    fi
+    return 0
+}
+
+print_conf_name_help() {
+    cat << EOF
+
+Note: passing argument to script creates client configuration with supplied
+      name to help remembering which config was for which device. If you
+      didn't pass any argument you can still rename created file manually
+      with command:
+  mv -vi wgclient_$1.conf wgclient_name.conf
+
+EOF
+}
+
+create_new_client() {
+    SEQNO="$1"
+    CONF_NAME="$2"
+
+    create_new_client_conf "$SEQNO" "$CONF_NAME"
+    if qrencode -V >/dev/null 2>&1; then
+        print_client_qrcode "$CONF_NAME"
+    else
+        print_client_conf "$CONF_NAME"
+    fi
+    add_client_to_hub_conf "$SEQNO" "$CONF_NAME"
+    remove_temporary_client_key_file "$CONF_NAME"
+}
+
+main() {
+    umask 077
+
+    CONF_NAME="$1"
+
+    test -f extnetif.txt || create_ext_net_if
+    EXT_NET_IF="$(get_ext_net_if)"
+    test -f extnetip.txt || create_ext_net_ip "$EXT_NET_IF"
+    EXT_NET_IP="$(get_ext_net_ip)"
+
+    test -f intnetmtu.txt || create_int_net_mtu
+    INT_NET_MTU="$(get_int_net_mtu)"
+    if test "$INT_NET_MTU" -lt 1280 || test "$INT_NET_MTU" -gt 1420; then
+        echo 'MTU should be set between 1280 and 1420 bytes.'
+        echo 'Set it manually in intnetmtu.txt file and start script again.'
+        exit 1
+    fi
+    test -f intnetmask.txt || create_int_net_mask
+    INT_NET_MASK="$(get_int_net_mask)"
+    test -f intnetdns.txt || create_int_net_dns
+    INT_NET_DNS="$(get_int_net_dns)"
+    test -f intnetaddress.txt || create_int_net_address
+    INT_NET_ADDRESS="$(get_int_net_address)"
+    INT_NET_ADDRESS_MASK="/32"
+    INT_NET_HUB_IP="${INT_NET_ADDRESS}1"
+    test -f intnetallowedips.txt || create_client_allowedips
+    INT_NET_CLINET_ALLOWEDIPS="$(get_client_allowedips)"
+
+    test -f fwtype.txt || create_fw_type
+    FW_TYPE="$(get_fw_type)"
+    test -f sysctltype.txt || create_sysctl_type
+    SYSCTL_TYPE="$(get_sysctl_type)"
+
+    NET6=false
+    check_if_ipv6_is_available "$EXT_NET_IF" && {
+        NET6=true
+        test -f ipv6mode.txt || create_ipv6_mode
+        NET6MODE="$(get_ipv6_mode)"
+        test -f intnet6mask.txt || create_int_net6_mask
+        INT_NET6_MASK="$(get_int_net6_mask)"
+        test -f intnet6dns.txt || create_int_net6_dns
+        INT_NET6_DNS="$(get_int_net6_dns)"
+        test -f intnet6address.txt || create_int_net6_address
+        INT_NET6_ADDRESS="$(get_int_net6_address)"
+        INT_NET6_ADDRESS_MASK="/128"
+        INT_NET6_HUB_IP="${INT_NET6_ADDRESS}1"
+    }
+
+    check_if_wg_is_installed
+    test -f seqno.txt  || create_seq_no
+    SEQNO="$(get_seq_no)"
+    test -f portno.txt || create_port_no
+    EXT_NET_PORT="$(get_port_no)"
+    test -f wgpsk.key  || create_psk
+    test -f wghub.key  || create_hub_key
+    test -f wghub.conf || create_hub_conf
+
+    if test -z "$CONF_NAME"; then
+        CONF_NAME="$SEQNO"
+        print_conf_name_help "$SEQNO"
+    fi
+
+    if check_conf_name_is_available "$CONF_NAME"; then
+        create_new_client "$SEQNO" "$CONF_NAME"
+    fi
+}
+
+main "$1"

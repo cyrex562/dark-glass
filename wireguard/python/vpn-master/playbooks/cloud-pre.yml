@@ -1,0 +1,23 @@
+---
+- block:
+  - name: Display the invocation environment
+    shell: >
+      ./algo-showenv.sh \
+        'algo_dns_adblocking "{{ algo_dns_adblocking }}"' \
+        'dns_encryption "{{ dns_encryption }}"' \
+        'wireguard_enabled "{{ wireguard_enabled }}"' \
+        > /dev/tty
+    tags: debug
+
+  - name: Install the requirements
+    pip:
+      state: latest
+      name:
+        - pyOpenSSL
+        - jinja2==2.8
+        - segno
+    tags:
+      - always
+      - skip_ansible_lint
+  delegate_to: localhost
+  become: false

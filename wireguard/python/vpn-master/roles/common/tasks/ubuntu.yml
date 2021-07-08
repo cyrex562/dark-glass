@@ -1,0 +1,149 @@
+---
+- name: Gather facts
+  setup:
+
+- name: Gather additional facts
+  import_tasks: facts.yml
+
+# these keys are the signing keys for the debian unstable repo, so they are needed to pull packages from there
+- name: Add Debian key 1 from keyserver
+  apt_key:
+    keyserver: keyserver.ubuntu.com
+    id: 04EE7237B7D453EC
+
+- name: Add Debian key 2 from keyserver
+  apt_key:
+    keyserver: keyserver.ubuntu.com
+    id: 648ACFD622F3D138
+
+# the version of dnscrypt-proxy included in Buster is too old what what Algo requires, do use the unstable repo to fetch the DEB
+- name: Add the repository
+  apt_repository:
+    state: present
+    repo: deb https://deb.debian.org/debian/ unstable main
+    update_cache: true
+  register: result
+  until: result is succeeded
+  retries: 10
+  delay: 3
+
+# we only want specific packages from unstable, so pin it so that the stable packages have higher priority
+- name: Pin the unstable repository
+  copy:
+    src: pinning.pref
+    dest: /etc/apt/preferences.d/pinning.pref
+    owner: root
+    group: root
+    mode: 0644
+
+- name: dev-sec.os-hardening
+  import_role:
+    name: dev-sec.os-hardening
+  vars:
+    sysctl_overwrite:
+      net.ipv4.ip_forward: 1
+      net.ipv4.conf.all.forwarding: 1
+      net.ipv6.conf.all.forwarding: "{{ '1' if ipv6_support else '0' }}"
+      net.ipv6.conf.all.disable_ipv6: "{{ '0' if ipv6_support else '1' }}"
+  tags: os-hardening
+
+- name: dev-sec.ssh-hardening
+  import_role:
+    name: dev-sec.ssh-hardening
+  tags: ssh-hardening
+
+- name: Include unatteded upgrades configuration
+  import_tasks: unattended-upgrades.yml
+
+- name: Disable MOTD on login and SSHD
+  replace: dest="{{ item.file }}" regexp="{{ item.regexp }}" replace="{{ item.line }}"
+  with_items:
+    - { regexp: '^session.*optional.*pam_motd.so.*', line: '# MOTD DISABLED', file: '/etc/pam.d/login' }
+    - { regexp: '^session.*optional.*pam_motd.so.*', line: '# MOTD DISABLED', file: '/etc/pam.d/sshd' }
+
+- name: Loopback for services configured
+  template:
+    src: 10-algo-lo100.network.j2
+    dest: /etc/systemd/network/10-algo-lo100.network
+  notify:
+    - restart systemd-networkd
+
+- name: systemd services enabled and started
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  with_items:
+    - systemd-networkd
+    - systemd-resolved
+
+- meta: flush_handlers
+
+- name: AppArmor installed
+  apt:
+    pkg:
+      - apparmor
+      - apparmor-utils
+      - apparmor-profiles
+      - apparmor-profiles-extra
+    state: present
+
+- name: Check if apparmor is enabled
+  command: apparmor_status
+  ignore_errors: yes
+  changed_when: false
+  register: apparmor_status
+
+- name: Set fact if apparmor enabled
+  set_fact:
+    apparmor_enabled: "{{ not apparmor_status.failed and 'profiles are in enforce mode' in apparmor_status.stdout }}"
+
+- debug:
+    msg: "apparmor_enabled: {{ apparmor_enabled }}"
+
+- block:
+  - name: enable apparmor on boot
+    lineinfile:
+      path: /boot/armbianEnv.txt
+      line: "extraargs=apparmor=1 security=apparmor"
+
+  - name: Reboot
+    shell: sleep 2 && shutdown -r now "Ansible updates triggered"
+    async: 1
+    poll: 0
+    ignore_errors: true
+
+  - name: Wait until the server becomes ready...
+    wait_for_connection:
+      delay: 20
+      timeout: 320
+    become: false
+
+  - name: enable apparmor profiles
+    shell: for f in /etc/apparmor.d/*.* ; do aa-enforce $f; done
+    become: true
+
+  when: apparmor_enabled == False
+
+- name: Set OS specific facts
+  set_fact:
+    tools:
+      - git
+      - screen
+      - uuid-runtime
+      - coreutils
+      - iptables-persistent
+      - cgroup-tools
+      - openssl
+      - gnupg2
+      - qrencode
+    sysctl:
+
+- name: Install tools
+  apt:
+    name: "{{ tools|default([]) }}"
+    state: present
+
+- include_tasks: iptables.yml
+  tags: iptables
